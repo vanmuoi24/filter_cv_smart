@@ -1,50 +1,40 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import pdfplumber
+from pdf_extractor import extract_text_from_pdf
+from ai_engine import SmartCVEngine
 
-app = FastAPI(title="AI CV Filter API")
+app = FastAPI(title="AI Smart CV Ranker API")
 
-def extract_text_from_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-    return text.strip()
+# Load AI engine at startup
+engine = SmartCVEngine()
 
-def calculate_similarity(job_desc, cv_text):
-    documents = [job_desc, cv_text]
-
-    vectorizer = TfidfVectorizer(
-        stop_words="english",
-        max_features=3000
-    )
-    tfidf_matrix = vectorizer.fit_transform(documents)
-
-    similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-    return round(similarity[0][0] * 100, 2)
 
 @app.get("/")
 def root():
-    return {"status": "AI CV Filter is running"}
+    return {"status": "Smart CV Ranker API is running"}
+
 
 @app.post("/filter-cv")
 async def filter_cv(
     job_description: str = Form(...),
-    cv_file: UploadFile = File(...)
+    cv_file: UploadFile = File(...),
 ):
+    """Filter a single CV against a job description using AI semantic matching."""
     if not cv_file.filename.endswith(".pdf"):
         return {"error": "Only PDF files are supported"}
 
-    cv_text = extract_text_from_pdf(cv_file.file)
+    cv_bytes = await cv_file.read()
+    cv_text = extract_text_from_pdf(cv_bytes)
 
     if not cv_text:
         return {"error": "Cannot extract text from PDF"}
 
-    match_score = calculate_similarity(job_description, cv_text)
+    match_score = engine.calculate_similarity(job_description, cv_text)
+
+    from config import Config
 
     return {
         "cv_filename": cv_file.filename,
         "match_score_percent": match_score,
-        "cv_text_preview": cv_text[:800]
+        "label": Config.get_label(match_score),
+        "cv_text_preview": cv_text[:800],
     }
