@@ -1,0 +1,86 @@
+# Smart CV Ranker — Walkthrough
+
+## What Was Built
+
+A complete **AI-powered CV Ranking system** based on the PRD, replacing the basic TF-IDF keyword matching with semantic AI understanding.
+
+## Files Created / Modified
+
+| File | Action | Purpose |
+|------|--------|---------|
+| [config.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/config.py) | NEW | Centralized config (Cloudinary, AI model, thresholds, cache) |
+| [pdf_extractor.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/pdf_extractor.py) | NEW | PDF text extraction with pdfplumber (1/2 column support) |
+| [ai_engine.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/ai_engine.py) | NEW | Sentence Embedding engine with batch encoding & ranking |
+| [cloudinary_service.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/cloudinary_service.py) | NEW | Cloudinary integration with multi-threaded download & caching |
+| [app.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/app.py) | NEW | Streamlit dashboard with ranking table, stats, CSV export |
+| [main.py](file:///Users/admin/Project/cv-matching/filter_cv_smart/main.py) | MODIFIED | Upgraded to use AI engine instead of TF-IDF |
+| [requirements.txt](file:///Users/admin/Project/cv-matching/filter_cv_smart/requirements.txt) | MODIFIED | Added `sentence-transformers`, `streamlit`, [cloudinary](file:///Users/admin/Project/cv-matching/filter_cv_smart/cloudinary_service.py#13-25), etc. |
+| [.env.example](file:///Users/admin/Project/cv-matching/filter_cv_smart/.env.example) | NEW | Environment template for Cloudinary credentials |
+| [README.md](file:///Users/admin/Project/cv-matching/filter_cv_smart/README.md) | MODIFIED | Full documentation |
+
+## Verification Results
+
+| Test | Result |
+|------|--------|
+| PDF Extractor import | ✅ OK |
+| AI Model load (`paraphrase-multilingual-MiniLM-L12-v2`) | ✅ Downloaded & loaded |
+| Vietnamese semantic matching test | ✅ **84.6%** score (JD: "lập trình viên Python, Django, REST API" ↔ CV: "3 năm Python, Django, RESTful API") |
+| Dependencies install | ✅ All packages installed |
+
+## How to Run
+
+```bash
+cd /Users/admin/Project/cv-matching/filter_cv_smart
+source venv/bin/activate
+streamlit run app.py
+```
+
+## Luồng hoạt động (System Workflow)
+
+Dưới đây là quy trình xử lý của hệ thống Smart CV Ranker từ lúc nhập dữ liệu đến khi xuất kết quả:
+
+### 1. Sơ đồ quy trình
+
+```mermaid
+graph TD
+    A[Người dùng nhập JD & Cloudinary Config] --> B{Nhấn 'Kết nối & Quét CV'}
+    B --> C[Cloudinary Service: Liệt kê file PDF]
+    C --> D[Multi-threading: Tải & Trích xuất Text]
+    
+    subgraph "Xử lý song song & Caching"
+    D --> E{Kiểm tra Cache?}
+    E -- Có --> F[Lấy Text từ Cache local]
+    E -- Không --> G[Tải PDF từ Cloudinary]
+    G --> H[PDF Extractor: pdfplumber trích xuất Text]
+    H --> I[Lưu Text vào Cache local]
+    end
+    
+    F --> J[Người dùng nhấn 'Phân tích & Xếp hạng']
+    I --> J
+    
+    J --> K[AI Engine: Load model MiniLM-L12]
+    K --> L[Chuyển JD & CV sang Vector Embeddings]
+    L --> M[Tính Cosine Similarity %]
+    M --> N[Xếp hạng & Gắn nhãn Phù hợp/Tiềm năng]
+    N --> O[Hiển thị Bảng xếp hạng trên Streamlit]
+    O --> P[Xuất file CSV]
+```
+
+### 2. Giải thích chi tiết
+
+1.  **Cấu hình & Quét (Phase 1):**
+    *   Hệ thống kết nối API Cloudinary để liệt kê toàn bộ file `.pdf` trong thư mục được chỉ định.
+    *   Sử dụng `ThreadPoolExecutor` (Multi-threading) để xử lý nhiều CV cùng lúc (mặc định 5 luồng).
+    *   **Cơ chế Caching:** Đối với mỗi file, hệ thống băm (MD5) `public_id` để kiểm tra trong thư mục [cache/](file:///Users/admin/Project/cv-matching/filter_cv_smart/cloudinary_service.py#84-94). Nếu đã từng xử lý, nó sẽ đọc text trực tiếp từ file JSON để tiết kiệm băng thông và thời gian. Nếu chưa, nó mới tải PDF và dùng `pdfplumber` để trích xuất text.
+
+2.  **Phân tích ngữ nghĩa AI (Phase 2):**
+    *   Sử dụng mô hình **Sentence Embedding** (`paraphrase-multilingual-MiniLM-L12-v2`). Đây là mô hình chuyên biệt cho việc so sánh độ tương đồng ngữ nghĩa, hỗ trợ tốt tiếng Việt.
+    *   Model chuyển đổi toàn bộ đoạn văn bản JD và các CV thành các mảng số (vectors).
+    *   Thuật toán **Cosine Similarity** tính toán góc giữa các vector này để xác định độ trùng khớp về mặt ý nghĩa, thay vì chỉ tìm từ khóa chính xác.
+
+3.  **Kết quả & Phân loại (Phase 3):**
+    *   Dựa trên điểm số (%), hệ thống tự động gắn nhãn:
+        *   **≥ 70%:** Phù hợp (Màu xanh).
+        *   **≥ 40%:** Tiềm năng (Màu vàng).
+        *   **< 40%:** Không phù hợp (Màu đỏ).
+    *   Người dùng có thể xem nhanh (Preview) nội dung CV hoặc mở link PDF gốc trực tiếp trên Cloudinary.
