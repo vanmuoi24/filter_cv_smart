@@ -1,5 +1,5 @@
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine
 from config import Config
 
@@ -7,11 +7,13 @@ from config import Config
 class SmartCVEngine:
     """AI Semantic Engine using Sentence Embeddings for CV-JD matching."""
 
-    def __init__(self, model_name: str = None):
-        self.model_name = model_name or Config.AI_MODEL_NAME
-        print(f"[AI Engine] Loading model: {self.model_name} ...")
-        self.model = SentenceTransformer(self.model_name)
-        print("[AI Engine] Model loaded successfully.")
+    def __init__(self):
+        print("[AI Engine] Initializing TF-IDF Vectorizer...")
+        self.vectorizer = TfidfVectorizer(
+            stop_words=None,  # Or add 'english' if needed, but project is multilingual
+            token_pattern=r"(?u)\b\w\w+\b",
+        )
+        print("[AI Engine] TF-IDF Engine ready.")
 
     def encode_text(self, text: str) -> np.ndarray:
         """Convert text to a semantic vector embedding."""
@@ -33,26 +35,23 @@ class SmartCVEngine:
         self, jd_text: str, candidates: list[dict]
     ) -> list[dict]:
         """
-        Rank a list of candidates against a JD.
-
-        Args:
-            jd_text: The job description text.
-            candidates: List of dicts with keys: 'filename', 'cv_text', 'url'.
-
-        Returns:
-            Sorted list (highest score first) with added 'score' and 'label'.
+        Rank candidates against a JD using TF-IDF.
         """
         if not candidates:
             return []
 
-        # Encode JD once
-        jd_vector = self.encode_text(jd_text).reshape(1, -1)
-
-        # Encode all CVs in batch for performance
+        # Combine JD and all CV texts for the corpus to compute IDF properly
         cv_texts = [c["cv_text"] for c in candidates]
-        cv_vectors = self.model.encode(cv_texts, show_progress_bar=False)
+        corpus = [jd_text] + cv_texts
 
-        # Calculate similarities
+        # Fit and transform the entire corpus
+        tfidf_matrix = self.vectorizer.fit_transform(corpus)
+
+        # JD is the first row, CVs are the rest
+        jd_vector = tfidf_matrix[0:1]
+        cv_vectors = tfidf_matrix[1:]
+
+        # Calculate cosine similarities
         similarities = sklearn_cosine(jd_vector, cv_vectors)[0]
 
         results = []

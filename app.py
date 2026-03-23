@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import time
+import os
+import subprocess
 
 st.set_page_config(
     page_title="Smart CV Ranker",
@@ -122,12 +124,41 @@ def _score_bar(score: float) -> str:
 
 
 # ── Sidebar: Cloudinary Config ──────────────────────────────────────────────
+if "folder_path" not in st.session_state:
+    st.session_state.folder_path = os.path.expanduser("~/Downloads/CVs")
+
+# ── Folder Picker Logic (macOS Native) ──────────────────────────────────────
+def select_folder_mac():
+    """Opens a native macOS folder picker using AppleScript."""
+    try:
+        cmd = "osascript -e 'POSIX path of (choose folder with prompt \"Chọn thư mục chứa CV\")'"
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = process.communicate()
+        if out:
+            path = out.decode('utf-8').strip()
+            st.session_state.folder_path = path
+    except Exception as e:
+        st.error(f"Không thể mở bảng chọn thư mục: {e}")
+
+# ── Sidebar: Choose Folder ──────────────────────────────────────────────────
 with st.sidebar:
-    st.header("☁️ Cấu hình Cloudinary")
-    cloud_name = st.text_input("Cloud Name", value="", type="default")
-    api_key = st.text_input("API Key", value="", type="password")
-    api_secret = st.text_input("API Secret", value="", type="password")
-    folder = st.text_input("Thư mục chứa CV", value="cv_uploads")
+    st.header("📂 Chọn thư mục chứa CV")
+    
+    col_path, col_btn = st.columns([3, 1])
+    with col_btn:
+        if st.button("📁 Browse"):
+            select_folder_mac()
+            
+    with col_path:
+        folder_path = st.text_input(
+            "Đường dẫn thư mục", 
+            value=st.session_state.folder_path,
+            key="folder_input",
+            help="Chọn hoặc nhập đường dẫn đầy đủ tới thư mục chứa file PDF."
+        )
+    
+    # Update session state if user types manually
+    st.session_state.folder_path = folder_path
 
     st.divider()
     st.header("⚙️ Cài đặt")
@@ -136,7 +167,7 @@ with st.sidebar:
 
     st.divider()
     connect_btn = st.button(
-        "🔗 Kết nối & Quét CV", use_container_width=True, type="primary"
+        "📁 Quét Thư Mục CV", use_container_width=True, type="primary"
     )
 
 
@@ -151,56 +182,48 @@ if "scan_done" not in st.session_state:
 
 # ── Scan Cloudinary ─────────────────────────────────────────────────────────
 if connect_btn:
-    if not cloud_name or not api_key or not api_secret:
-        st.sidebar.error("⚠️ Vui lòng nhập đầy đủ thông tin Cloudinary!")
+    if not st.session_state.folder_path:
+        st.sidebar.error("⚠️ Vui lòng chọn hoặc nhập đường dẫn thư mục!")
     else:
-        with st.spinner("Đang kết nối Cloudinary & quét CV..."):
+        with st.spinner("Đang quét thư mục & tải CV..."):
             try:
-                from cloudinary_service import (
-                    configure_cloudinary,
-                    list_pdf_files,
-                    download_all_pdfs,
-                )
+                from local_service import scan_local_pdfs
                 from config import Config
+                import os
 
                 # Update thresholds
                 Config.THRESHOLD_GOOD = threshold_good
                 Config.THRESHOLD_POTENTIAL = threshold_potential
 
-                configure_cloudinary(cloud_name, api_key, api_secret)
-                pdf_list = list_pdf_files(folder)
+                progress_bar = st.progress(0, text="Đang bắt đầu quét...")
 
-                if not pdf_list:
-                    st.warning(
-                        f"Không tìm thấy file PDF nào trong thư mục "
-                        f"'{folder}' trên Cloudinary."
+                def update_progress(current, total):
+                    progress_bar.progress(
+                        current / total,
+                        text=f"Đang xử lý {current}/{total} CV...",
                     )
+                
+                # Expand path in case of ~/
+                full_path = os.path.expanduser(st.session_state.folder_path)
+
+                if not os.path.exists(full_path) or not os.path.isdir(full_path):
+                     st.error(f"❌ Đường dẫn không hợp lệ hoặc không phải là thư mục: {full_path}")
                 else:
-                    st.info(
-                        f"Tìm thấy **{len(pdf_list)}** file CV. "
-                        f"Đang tải & trích xuất văn bản..."
-                    )
-
-                    progress_bar = st.progress(0, text="Đang xử lý...")
-
-                    def update_progress(current, total):
-                        progress_bar.progress(
-                            current / total,
-                            text=f"Đang xử lý {current}/{total} CV...",
+                    candidates = scan_local_pdfs(full_path, progress_callback=update_progress)
+                    
+                    if not candidates:
+                        st.warning(f"Không tìm thấy file PDF nào hoặc không thể trích xuất văn bản trong '{full_path}'.")
+                    else:
+                        st.session_state.candidates = candidates
+                        st.session_state.scan_done = True
+                        st.success(
+                            f"✅ Đã tải thành công "
+                            f"**{len(candidates)}** CV từ thư mục nội bộ!"
                         )
-
-                    candidates = download_all_pdfs(
-                        pdf_list, progress_callback=update_progress
-                    )
-                    st.session_state.candidates = candidates
-                    st.session_state.scan_done = True
-                    progress_bar.empty()
-                    st.success(
-                        f"✅ Đã tải thành công "
-                        f"**{len(candidates)}/{len(pdf_list)}** CV!"
-                    )
+                
+                progress_bar.empty()
             except Exception as e:
-                st.error(f"❌ Lỗi kết nối: {e}")
+                st.error(f"❌ Lỗi xử lý: {e}")
 
 
 # ── Main Area ───────────────────────────────────────────────────────────────
@@ -244,7 +267,7 @@ if analyze_btn:
     if not jd_text.strip():
         st.error("⚠️ Vui lòng nhập mô tả công việc!")
     elif not st.session_state.candidates:
-        st.error("⚠️ Chưa có CV nào được tải. Hãy kết nối Cloudinary trước!")
+        st.error("⚠️ Chưa có CV nào được quét. Hãy chọn thư mục và quét CV trước!")
     else:
         with st.spinner("🧠 AI đang phân tích CV..."):
             try:
